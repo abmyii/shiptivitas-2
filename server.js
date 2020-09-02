@@ -122,12 +122,57 @@ app.put('/api/v1/clients/:id', (req, res) => {
   }
 
   let { status, priority } = req.body;
-  let clients = db.prepare('select * from clients').all();
+  let clients = db.prepare('select * from clients order by priority').all();
   const client = clients.find(client => client.id === id);
 
-  /* ---------- Update code below ----------*/
+  // Remove the client and reorder source swimlane
+  var swimlane_changed = false;
 
+  if (status && client.status !== status) {
+    swimlane_changed = true;
 
+    // Reorder priority of clients in source swimlane based on their index after removing client
+    var source_swimlane = clients.filter(el => el.status == client.status);
+    source_swimlane.splice(source_swimlane.indexOf(client), 1);
+    source_swimlane.forEach(function (item, index) {
+      clients[clients.indexOf(item)].priority = index + 1;
+    });
+
+    client.status = status;
+    db.prepare('UPDATE clients SET status = ? WHERE id = ?').run(client.status, client.id);
+  }
+
+  // Add the client into the destination swimlane and reorder
+  var dest_swimlane = clients.filter(el => el.status == client.status);
+
+  if (priority) {
+    client.priority = priority;
+
+    if (!swimlane_changed)
+      // Delete before adding back at desired position (in case the swimlane hasn't changed)
+      dest_swimlane.splice(dest_swimlane.indexOf(client), 1);
+
+    // Insert it at the desired index (based on priority)
+    dest_swimlane.splice(client.priority-1, 0, client);
+  }
+  else if (swimlane_changed)
+    // Add to the end of the destination swimlane if the client has been moved between swimlanes and no priority specified
+    dest_swimlane.push(client);
+
+  // Reorder priority of clients in destination swimlane
+  dest_swimlane.forEach(function (item, index) {
+    // Set client priorities based on index in swimlane
+    var ind = clients.indexOf(item);
+    if (clients[ind].priority != index + 1) {
+      clients[ind].priority = index + 1;
+
+      // Update priority in DB
+      db.prepare('UPDATE clients SET priority = ? WHERE id = ?').run(
+        clients[ind].priority,
+         clients[ind].id
+      );
+    }
+  });
 
   return res.status(200).send(clients);
 });
